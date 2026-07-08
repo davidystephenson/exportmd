@@ -275,13 +275,19 @@ export default function Home (): JSX.Element {
             <CardContent className='flex min-h-0 flex-1 flex-col gap-4 overflow-hidden'>
               <MarkdownPreview content={exportResult.markdown} />
 
-              <ExportActions
-                copied={copied}
-                className='shrink-0'
-                onDownload={handleDownload}
-                onCopy={() => { void handleCopy() }}
-                onReset={handleReset}
-              />
+              <div className='flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+                <p className='text-sm text-muted-foreground'>
+                  <span className='font-medium text-foreground'>Source:</span>{' '}
+                  {exportResult.source}
+                </p>
+                <ExportActions
+                  copied={copied}
+                  className='sm:justify-end'
+                  onDownload={handleDownload}
+                  onCopy={() => { void handleCopy() }}
+                  onReset={handleReset}
+                />
+              </div>
             </CardContent>
           </Card>
         )}

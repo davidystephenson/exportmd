@@ -270,6 +270,7 @@ export interface ExportResult {
   title: string
   markdown: string
   filename: string
+  source: string
 }
 
 export type ExportStrategy = 'client-proxy' | 'server-api'
@@ -360,7 +361,7 @@ async function fetchShareHtmlOnServer (shareUrl: string): Promise<string> {
 export async function exportChatGptShareOnServer (url: string): Promise<ExportResult> {
   const { trimmed, shareId } = validateShareUrl(url)
   const html = await fetchShareHtmlOnServer(trimmed)
-  return parseShareHtml(html, shareId, trimmed, 'server')
+  return parseShareHtml(html, shareId, trimmed, 'server', '/api/export')
 }
 
 async function exportViaApiFallback (
@@ -416,9 +417,11 @@ async function exportViaApiFallback (
     !('title' in payload) ||
     !('markdown' in payload) ||
     !('filename' in payload) ||
+    !('source' in payload) ||
     typeof payload.title !== 'string' ||
     typeof payload.markdown !== 'string' ||
-    typeof payload.filename !== 'string'
+    typeof payload.filename !== 'string' ||
+    typeof payload.source !== 'string'
   ) {
     throw new Error('Could not export this conversation. Please try again.')
   }
@@ -432,7 +435,8 @@ async function exportViaApiFallback (
   return {
     title: payload.title,
     markdown: payload.markdown,
-    filename: payload.filename
+    filename: payload.filename,
+    source: payload.source
   }
 }
 
@@ -508,7 +512,8 @@ function parseShareHtml (
   html: string,
   shareId: string,
   shareUrl: string,
-  proxyUrl?: string
+  proxyUrl: string | undefined,
+  source: string
 ): ExportResult {
   const accessError = getShareAccessError(html)
   if (accessError != null) {
@@ -551,7 +556,8 @@ function parseShareHtml (
   return {
     title: chat.title.length > 0 ? chat.title : 'ChatGPT Export',
     markdown,
-    filename
+    filename,
+    source
   }
 }
 
@@ -594,7 +600,7 @@ export async function exportChatGptShare (
       source,
       status: 'Parsing conversation…'
     })
-    const result = parseShareHtml(html, shareId, trimmed, proxyUrl)
+    const result = parseShareHtml(html, shareId, trimmed, proxyUrl, source)
     reportProgress(onProgress, {
       strategy: 'client-proxy',
       source,
