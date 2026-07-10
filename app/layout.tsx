@@ -8,7 +8,7 @@ const geist = Geist({ subsets: ['latin'], variable: '--font-sans' })
 
 export const metadata: Metadata = {
   title: 'ExportMD',
-  description: 'One click ChatGPT to Markdown'
+  description: 'One click ChatGPT or Grok to Markdown'
 }
 
 export default function RootLayout (props: {

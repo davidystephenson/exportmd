@@ -1,0 +1,9 @@
+{
+  "customRules": [
+    ".markdownlint-rules/prose-punctuation.cjs"
+  ],
+  "ignores": [
+    "node_modules",
+    "archive/bakeoffs"
+  ]
+}

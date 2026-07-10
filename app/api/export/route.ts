@@ -1,5 +1,5 @@
 import {
-  exportChatGptShareOnServer,
+  exportConversationShareOnServer,
   PrivateConversationUrlError
 } from '@/lib/export-chatgpt'
 
@@ -22,7 +22,7 @@ export async function POST (request: Request): Promise<Response> {
   }
 
   try {
-    const result = await exportChatGptShareOnServer(url)
+    const result = await exportConversationShareOnServer(url)
     return Response.json(result)
   } catch (error) {
     if (error instanceof PrivateConversationUrlError) {

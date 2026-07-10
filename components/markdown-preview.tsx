@@ -14,7 +14,7 @@ export function MarkdownPreview ({
   return (
     <div
       className={cn(
-        'markdown-preview min-h-0 flex-1 overflow-x-hidden overflow-y-auto rounded-lg border bg-muted/30 p-4 text-sm leading-relaxed break-words [overflow-wrap:anywhere]',
+        'markdown-preview min-h-0 flex-1 overflow-x-hidden overflow-y-auto border-b bg-muted/30 p-4 text-sm leading-relaxed break-words [overflow-wrap:anywhere]',
         className
       )}
     >

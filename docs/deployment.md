@@ -1,7 +1,6 @@
 # ExportMD deployment
 
-ExportMD is deployed on Vercel and uses Cloudflare Registrar and DNS for
-`exportmd.com`.
+ExportMD is deployed on Vercel and uses Cloudflare Registrar and DNS for `exportmd.com`.
 
 ## Domain setup
 
@@ -17,8 +16,7 @@ Use Vercel dashboard records exactly. Typical defaults are:
 | `@` | A | `76.76.21.21` |
 | `www` | CNAME | `cname.vercel-dns.com` |
 
-Keep Cloudflare proxy status set to **DNS only** so Vercel can verify the
-domain and issue TLS certificates.
+Keep Cloudflare proxy status set to **DNS only** so Vercel can verify the domain and issue TLS certificates.
 
 ## Verify
 
@@ -38,14 +36,13 @@ curl -sI https://exportmd.com | head -5
 curl -sI https://www.exportmd.com | head -5
 ```
 
-Expected result: `200`, `301`, or `302`, depending on the canonical-domain
-redirect configured in Vercel.
+Expected result: `200`, `301`, or `302`, depending on the canonical-domain redirect configured in Vercel.
 
 ## Troubleshooting
 
 | Symptom | Likely fix |
 | --- | --- |
-| Vercel invalid config | Match DNS; keep proxy off. |
+| Vercel invalid config | Match DNS, keep proxy off. |
 | `www` fails but apex works | Add or fix the `www` CNAME |
-| Browser shows SSL errors | Keep proxy DNS-only; wait for Vercel TLS. |
+| Browser shows SSL errors | Keep proxy DNS-only, wait for Vercel TLS. |
 | Wrong app loads | Attach custom domain to the ExportMD Vercel project. |

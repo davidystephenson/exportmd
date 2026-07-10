@@ -1,23 +1,19 @@
 'use client'
 
-import { useRef, useState, type FormEvent, type JSX } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type JSX } from 'react'
 import { AlertCircleIcon, CheckIcon, Loader2Icon } from 'lucide-react'
 import { MarkdownPreview } from '@/components/markdown-preview'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle
+  CardContent
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
   copyMarkdown,
   downloadMarkdown,
-  exportChatGptShare,
+  exportConversationShare,
   PrivateConversationUrlError,
   type ExportProgress,
   type ExportResult
@@ -28,8 +24,10 @@ import { cn } from '@/lib/utils'
 type PageState = 'idle' | 'loading' | 'success' | 'error'
 type ErrorKind = 'generic' | 'private'
 
+const FAST_MODE_STORAGE_KEY = 'exportmd-fast-mode'
+
 function strategyLabel (strategy: ExportProgress['strategy']): string {
-  return strategy === 'client-proxy' ? 'Client CORS proxy' : 'Server API'
+  return strategy === 'client-proxy' ? 'Client CORS proxy' : 'Export worker'
 }
 
 function ExportProgressPanel ({ progress }: { progress: ExportProgress }): JSX.Element {
@@ -98,6 +96,21 @@ export default function Home (): JSX.Element {
   const [exportResult, setExportResult] = useState<ExportResult | null>(null)
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null)
   const [copied, setCopied] = useState(false)
+  const [fastMode, setFastMode] = useState(false)
+
+  useEffect(() => {
+    try {
+      setFastMode(window.localStorage.getItem(FAST_MODE_STORAGE_KEY) === 'true')
+    } catch {}
+  }, [])
+
+  function handleFastModeChange (checked: boolean): void {
+    setFastMode(checked)
+
+    try {
+      window.localStorage.setItem(FAST_MODE_STORAGE_KEY, String(checked))
+    } catch {}
+  }
 
   async function handleSubmit (event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
@@ -107,13 +120,13 @@ export default function Home (): JSX.Element {
     setErrorMessage('')
     setCopied(false)
     setExportProgress({
-      strategy: 'client-proxy',
-      source: 'corsfix',
-      status: 'Starting export…'
+      strategy: fastMode ? 'server-api' : 'client-proxy',
+      source: fastMode ? '/api/export' : 'corsfix',
+      status: fastMode ? 'Starting fast export…' : 'Starting export…'
     })
 
     try {
-      const result = await exportChatGptShare(url, setExportProgress)
+      const result = await exportConversationShare(url, setExportProgress, { fastMode })
       setExportResult(result)
       setPageState('success')
     } catch (error) {
@@ -178,24 +191,30 @@ export default function Home (): JSX.Element {
   return (
     <main className='flex h-svh flex-col overflow-hidden'>
       <div className='mx-auto my-auto flex w-full max-w-3xl min-h-0 max-h-full flex-col gap-8 overflow-hidden px-4 py-4'>
-        <header className='shrink-0 space-y-2 text-center'>
-          <div className='flex items-center justify-center gap-2'>
-            <h1 className='text-3xl font-semibold tracking-tight'>ExportMD</h1>
-            <ThemeToggle />
-          </div>
-          <p className='text-muted-foreground'>
-            Paste your ChatGPT share link and export it as Markdown.
-          </p>
-        </header>
+        <div className='mx-auto flex w-fit max-w-full shrink-0 flex-col gap-8'>
+          <header className='text-center'>
+            <div className='flex w-full items-center justify-between gap-4'>
+              <h1 className='shrink-0 text-3xl font-semibold tracking-tight'>ExportMD</h1>
+              <ThemeToggle />
+              <label className='flex shrink-0 items-center gap-2 whitespace-nowrap text-sm text-muted-foreground'>
+                <input
+                  type='checkbox'
+                  className='size-4 accent-primary'
+                  checked={fastMode}
+                  onChange={(event) => handleFastModeChange(event.target.checked)}
+                  disabled={isLoading}
+                />
+                <span>
+                  Fast mode <span className='hidden sm:inline'>(less private)</span>
+                </span>
+              </label>
+            </div>
+            <p className='mt-2 text-muted-foreground'>
+              Paste a ChatGPT or Grok share link and export it as Markdown.
+            </p>
+          </header>
 
-        <Card className='shrink-0'>
-          <CardHeader>
-            <CardTitle>Export conversation</CardTitle>
-            <CardDescription>
-              Works with public share links from chatgpt.com or chat.openai.com.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className='space-y-4'>
+          <section className='w-full shrink-0 space-y-4'>
             <form
               className='flex flex-col gap-3 sm:flex-row'
               onSubmit={(event) => { void handleSubmit(event) }}
@@ -203,11 +222,11 @@ export default function Home (): JSX.Element {
               <Input
                 ref={urlInputRef}
                 type='url'
-                placeholder='https://chatgpt.com/share/...'
+                placeholder='https://chatgpt.com/share/... or https://grok.com/share/...'
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
                 disabled={isLoading}
-                aria-label='ChatGPT share link'
+                aria-label='ChatGPT or Grok share link'
                 required
               />
               <Button type='submit' disabled={isLoading || trimmedUrl.length === 0} className='sm:min-w-28'>
@@ -256,26 +275,15 @@ export default function Home (): JSX.Element {
                 <AlertDescription>{errorMessage}</AlertDescription>
               </Alert>
             )}
-          </CardContent>
-        </Card>
+          </section>
+        </div>
 
         {hasExport && (
-          <Card className='flex min-h-0 flex-1 flex-col overflow-hidden'>
-            <CardHeader className='shrink-0'>
-              <CardTitle>{exportResult.title}</CardTitle>
-              <CardAction>
-                <ExportActions
-                  copied={copied}
-                  onDownload={handleDownload}
-                  onCopy={() => { void handleCopy() }}
-                  onReset={handleReset}
-                />
-              </CardAction>
-            </CardHeader>
-            <CardContent className='flex min-h-0 flex-1 flex-col gap-4 overflow-hidden'>
+          <Card className='flex min-h-0 flex-1 flex-col overflow-hidden pt-0'>
+            <CardContent className='flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-0'>
               <MarkdownPreview content={exportResult.markdown} />
 
-              <div className='flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+              <div className='flex shrink-0 flex-col gap-3 px-(--card-spacing) sm:flex-row sm:items-center sm:justify-between'>
                 <p className='text-sm text-muted-foreground'>
                   <span className='font-medium text-foreground'>Source:</span>{' '}
                   {exportResult.source}
