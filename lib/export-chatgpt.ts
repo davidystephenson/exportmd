@@ -1,5 +1,5 @@
 import {
-  chatGptShareToMarkdown,
+  type ChatGptShareConversation,
   CHATGPT_SHARE_HEADERS,
   decodeLoader,
   extractLoaderPayload,
@@ -10,6 +10,7 @@ import {
 
 const CHATGPT_HOSTS = new Set(['chatgpt.com', 'chat.openai.com'])
 const GROK_HOSTS = new Set(['grok.com', 'www.grok.com'])
+const EXPORTMD_API_SOURCE = 'ExportMD API'
 
 const JSONP_TIMEOUT_MS = 20_000
 const JSONP_CALLBACK_GRACE_MS = 750
@@ -22,10 +23,10 @@ interface CorsProxy {
   buildUrl: (shareUrl: string, callbackName?: string) => string
 }
 
-// Ordered by preference. Slow mode tries only the first provider, then falls back to the worker.
+// Ordered by preference. Slow mode tries each provider once, then falls back to the API.
 const CORS_PROXIES: CorsProxy[] = [
   {
-    id: 'corsfix',
+    id: 'Corsfix',
     kind: 'fetch-raw',
     buildUrl: (url) => `https://proxy.corsfix.com/?${url}`
   },
@@ -35,17 +36,17 @@ const CORS_PROXIES: CorsProxy[] = [
     buildUrl: (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`
   },
   {
-    id: 'allorigins-raw',
+    id: 'allOrigins raw',
     kind: 'fetch-raw',
     buildUrl: (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`
   },
   {
-    id: 'allorigins-get',
+    id: 'allOrigins get',
     kind: 'fetch-json',
     buildUrl: (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`
   },
   {
-    id: 'allorigins-jsonp',
+    id: 'allOrigins JSONP',
     kind: 'jsonp',
     buildUrl: (url, callbackName = 'callback') =>
       `https://api.allorigins.win/get?callback=${encodeURIComponent(callbackName)}&url=${encodeURIComponent(url)}`
@@ -61,7 +62,7 @@ const CORS_PROXIES: CorsProxy[] = [
     buildUrl: (url) => `https://api.cors.syrins.tech/?url=${encodeURIComponent(url)}`
   },
   {
-    id: 'every-origin-get',
+    id: 'every-origin',
     kind: 'fetch-json',
     buildUrl: (url) => `https://every-origin.vercel.app/get?url=${encodeURIComponent(url)}`
   }
@@ -203,7 +204,7 @@ async function fetchViaProxy (
   reportProgress(onProgress, {
     strategy: 'client-proxy',
     source: proxy.id,
-    status: `Trying ${proxy.id}…`
+    status: `Trying ${proxy.id}...`
   })
 
   const proxyUrl = proxy.buildUrl(shareUrl)
@@ -228,7 +229,7 @@ async function fetchTextViaProxy (
     reportProgress(onProgress, {
       strategy: 'client-proxy',
       source: proxy.id,
-      status: `Trying ${proxy.id}…`
+      status: `Trying ${proxy.id}...`
     })
 
     return {
@@ -241,7 +242,7 @@ async function fetchTextViaProxy (
   reportProgress(onProgress, {
     strategy: 'client-proxy',
     source: proxy.id,
-    status: `Trying ${proxy.id}…`
+    status: `Trying ${proxy.id}...`
   })
 
   const proxyUrl = proxy.buildUrl(targetUrl)
@@ -264,7 +265,7 @@ async function fetchViaJsonpProxy (
   reportProgress(onProgress, {
     strategy: 'client-proxy',
     source,
-    status: `Trying ${source}…`
+    status: `Trying ${source}...`
   })
 
   const html = await fetchViaJsonp(proxyUrl, callbackName)
@@ -299,7 +300,7 @@ export function isChatGptPrivateConversationUrl (input: string): boolean {
 export function isGrokShareUrl (input: string): boolean {
   try {
     const url = new URL(input.trim())
-    if (!GROK_HOSTS.has(url.hostname)) {
+    if (!isGrokHost(url.hostname)) {
       return false
     }
 
@@ -310,10 +311,23 @@ export function isGrokShareUrl (input: string): boolean {
   }
 }
 
+function isGrokHost (hostname: string): boolean {
+  return GROK_HOSTS.has(hostname)
+}
+
+function isGrokUrl (input: string): boolean {
+  try {
+    const url = new URL(input.trim())
+    return isGrokHost(url.hostname)
+  } catch {
+    return false
+  }
+}
+
 function getGrokShareId (input: string): string | null {
   try {
     const url = new URL(input.trim())
-    if (!GROK_HOSTS.has(url.hostname)) {
+    if (!isGrokHost(url.hostname)) {
       return null
     }
 
@@ -331,6 +345,17 @@ export interface ExportResult {
   markdown: string
   filename: string
   source: string
+}
+
+interface MarkdownMessage {
+  heading: string
+  body: string
+}
+
+interface MarkdownDocument {
+  title: string
+  metadata: string[]
+  messages: MarkdownMessage[]
 }
 
 export type ExportStrategy = 'client-proxy' | 'server-api'
@@ -354,8 +379,14 @@ function reportProgress (
   onProgress?.(progress)
 }
 
-function sanitizeFilename (title: string, shareId: string): string {
-  const base = title.trim().length > 0 ? title.trim() : shareId.length > 0 ? shareId : 'conversation-export'
+function timestampFilenameBase (): string {
+  return new Date().toISOString()
+    .replace(/\.\d{3}Z$/, 'Z')
+    .replace(/[:.]/g, '-')
+}
+
+function sanitizeFilename (title: string): string {
+  const base = title.trim().length > 0 ? title.trim() : timestampFilenameBase()
   const sanitized = base
     .replace(/[^\w\s-]/g, '')
     .replace(/\s+/g, '-')
@@ -363,8 +394,30 @@ function sanitizeFilename (title: string, shareId: string): string {
     .replace(/^-|-$/g, '')
     .slice(0, 80)
 
-  const fallback = shareId.length > 0 ? shareId : 'conversation-export'
-  return `${sanitized.length > 0 ? sanitized : fallback}-export.md`
+  return `${sanitized.length > 0 ? sanitized : timestampFilenameBase()}-export.md`
+}
+
+function formatUnixTimestamp (timestamp: number): string {
+  return new Date(timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)
+}
+
+function renderMarkdownDocument (document: MarkdownDocument): string {
+  const lines = [`# ${document.title}`]
+
+  if (document.metadata.length > 0) {
+    lines.push(`_${document.metadata.join(' | ')}_`)
+  }
+
+  lines.push('')
+
+  for (const message of document.messages) {
+    lines.push(`## ${message.heading}`)
+    lines.push('')
+    lines.push(message.body.trim())
+    lines.push('')
+  }
+
+  return `${lines.map((line) => line.trimEnd()).join('\n').trimEnd()}\n`
 }
 
 async function fetchShareHtml (
@@ -375,40 +428,52 @@ async function fetchShareHtml (
     proxyUrl: string
     source: string
   }> {
-  const proxy = CORS_PROXIES[0]
-  if (proxy == null) {
+  if (CORS_PROXIES.length === 0) {
     throw new Error('No client-side proxy is configured.')
   }
 
-  try {
-    return await fetchViaProxy(proxy, shareUrl, onProgress)
-  } catch (error) {
-    console.error('[ExportMD] Client-side proxy failed', {
-      shareUrl,
-      failure: `${proxy.id}: ${error instanceof Error ? error.message : 'request failed'}`
-    })
-    throw new Error('Client-side proxy failed.')
+  const failures: string[] = []
+
+  for (const proxy of CORS_PROXIES) {
+    try {
+      return await fetchViaProxy(proxy, shareUrl, onProgress)
+    } catch (error) {
+      const failure = `${proxy.id}: ${error instanceof Error ? error.message : 'request failed'}`
+      failures.push(failure)
+      console.error('[ExportMD] Client-side proxy failed', {
+        shareUrl,
+        failure
+      })
+    }
   }
+
+  throw new Error(`Client-side proxies failed: ${failures.join('; ')}`)
 }
 
-async function fetchTextViaFirstProxy (
+async function fetchTextViaAvailableProxies (
   targetUrl: string,
   onProgress?: ExportProgressCallback
 ): Promise<{ text: string, proxyUrl: string, source: string }> {
-  const proxy = CORS_PROXIES[0]
-  if (proxy == null) {
+  if (CORS_PROXIES.length === 0) {
     throw new Error('No client-side proxy is configured.')
   }
 
-  try {
-    return await fetchTextViaProxy(proxy, targetUrl, onProgress)
-  } catch (error) {
-    console.error('[ExportMD] Client-side proxy failed', {
-      targetUrl,
-      failure: `${proxy.id}: ${error instanceof Error ? error.message : 'request failed'}`
-    })
-    throw new Error('Client-side proxy failed.')
+  const failures: string[] = []
+
+  for (const proxy of CORS_PROXIES) {
+    try {
+      return await fetchTextViaProxy(proxy, targetUrl, onProgress)
+    } catch (error) {
+      const failure = `${proxy.id}: ${error instanceof Error ? error.message : 'request failed'}`
+      failures.push(failure)
+      console.error('[ExportMD] Client-side proxy failed', {
+        targetUrl,
+        failure
+      })
+    }
   }
+
+  throw new Error(`Client-side proxies failed: ${failures.join('; ')}`)
 }
 
 async function fetchShareHtmlOnServer (shareUrl: string): Promise<string> {
@@ -437,7 +502,7 @@ async function fetchShareHtmlOnServer (shareUrl: string): Promise<string> {
 export async function exportChatGptShareOnServer (url: string): Promise<ExportResult> {
   const { trimmed, shareId } = validateShareUrl(url)
   const html = await fetchShareHtmlOnServer(trimmed)
-  return parseShareHtml(html, shareId, trimmed, 'server', '/api/export')
+  return parseShareHtml(html, shareId, trimmed, 'server', EXPORTMD_API_SOURCE)
 }
 
 type GrokSender = 'human' | 'ASSISTANT' | string
@@ -474,9 +539,10 @@ function parseGrokSharePayload (
   shareId: string,
   source: string
 ): ExportResult {
-  const title = typeof payload.conversation?.title === 'string' && payload.conversation.title.trim().length > 0
+  const conversationTitle = typeof payload.conversation?.title === 'string'
     ? payload.conversation.title.trim()
-    : 'Grok Export'
+    : ''
+  const title = conversationTitle.length > 0 ? conversationTitle : 'Grok Export'
 
   const responses = Array.isArray(payload.responses)
     ? payload.responses.filter((response) => {
@@ -486,25 +552,19 @@ function parseGrokSharePayload (
     })
     : []
 
-  if (responses.length === 0) {
-    throw new Error('Could not read this Grok conversation - check the link is public and try again.')
-  }
-
-  const markdown = [
-    `# ${title}`,
-    '',
-    ...responses.flatMap((response) => [
-      `## ${senderLabel(response.sender)}`,
-      '',
-      String(response.message).trim(),
-      ''
-    ])
-  ].join('\n')
+  const markdown = renderMarkdownDocument({
+    title,
+    metadata: ['Provider: Grok'],
+    messages: responses.map((response) => ({
+      heading: senderLabel(response.sender),
+      body: String(response.message).trim()
+    }))
+  })
 
   return {
     title,
     markdown,
-    filename: sanitizeFilename(title, shareId),
+    filename: sanitizeFilename(conversationTitle),
     source
   }
 }
@@ -526,8 +586,22 @@ async function fetchGrokSharePayload (shareId: string): Promise<GrokSharePayload
     throw new Error('Could not fetch this Grok conversation. The link may be invalid or temporarily unavailable.')
   }
 
-  const payload: unknown = await response.json().catch(() => null)
+  const payload: unknown = await response.json().catch((cause) => {
+    logGrokParseFailure('Grok returned invalid JSON', {
+      shareId,
+      source: 'grok.com',
+      dataUrl: buildGrokShareDataUrl(shareId),
+      cause
+    })
+    return null
+  })
   if (payload == null || typeof payload !== 'object') {
+    logGrokParseFailure('Grok returned an invalid payload shape', {
+      shareId,
+      source: 'grok.com',
+      dataUrl: buildGrokShareDataUrl(shareId),
+      payload
+    })
     throw new Error('Grok returned an invalid response.')
   }
 
@@ -542,13 +616,26 @@ async function exportGrokShareViaClientProxy (
   shareId: string,
   onProgress?: ExportProgressCallback
 ): Promise<ExportResult> {
-  const { text, source } = await fetchTextViaFirstProxy(buildGrokShareDataUrl(shareId), onProgress)
-  const payload = parseJsonText(text, 'Grok') as GrokSharePayload
+  const dataUrl = buildGrokShareDataUrl(shareId)
+  const { text, source } = await fetchTextViaAvailableProxies(dataUrl, onProgress)
+  let payload: GrokSharePayload
+  try {
+    payload = parseJsonText(text, 'Grok') as GrokSharePayload
+  } catch (cause) {
+    logGrokParseFailure('Could not parse Grok proxy response JSON', {
+      shareId,
+      source,
+      dataUrl,
+      text,
+      cause
+    })
+    throw cause
+  }
 
   reportProgress(onProgress, {
     strategy: 'client-proxy',
     source,
-    status: 'Parsing conversation…'
+    status: 'Parsing conversation...'
   })
 
   const result = parseGrokSharePayload(payload, shareId, source)
@@ -569,11 +656,11 @@ export async function exportGrokShareOnServer (url: string): Promise<ExportResul
   }
 
   const payload = await fetchGrokSharePayload(shareId)
-  return parseGrokSharePayload(payload, shareId, 'grok.com')
+  return parseGrokSharePayload(payload, shareId, EXPORTMD_API_SOURCE)
 }
 
 export async function exportConversationShareOnServer (url: string): Promise<ExportResult> {
-  if (isGrokShareUrl(url)) {
+  if (isGrokUrl(url)) {
     return await exportGrokShareOnServer(url)
   }
 
@@ -587,8 +674,8 @@ async function exportViaApiFallback (
 ): Promise<ExportResult> {
   reportProgress(onProgress, {
     strategy: 'server-api',
-    source: '/api/export',
-    status: 'Fetching share page via server…'
+    source: EXPORTMD_API_SOURCE,
+    status: 'Fetching share page via server...'
   })
 
   let response: Response
@@ -644,7 +731,7 @@ async function exportViaApiFallback (
 
   reportProgress(onProgress, {
     strategy: 'server-api',
-    source: '/api/export',
+    source: EXPORTMD_API_SOURCE,
     status: 'Export complete.'
   })
 
@@ -693,6 +780,85 @@ function logParseFailure (
         }
       : cause,
     ...context.details
+  })
+}
+
+function debugPreview (value: unknown): unknown {
+  if (typeof value === 'string') {
+    return {
+      length: value.length,
+      start: value.slice(0, 500),
+      end: value.length > 500 ? value.slice(-200) : ''
+    }
+  }
+
+  try {
+    const serialized = JSON.stringify(value)
+    if (typeof serialized === 'string') {
+      return {
+        length: serialized.length,
+        start: serialized.slice(0, 500),
+        end: serialized.length > 500 ? serialized.slice(-200) : ''
+      }
+    }
+  } catch {}
+
+  return value
+}
+
+function logGrokParseFailure (
+  reason: string,
+  context: {
+    shareId: string
+    source: string
+    dataUrl?: string
+    text?: string
+    payload?: unknown
+    cause?: unknown
+  }
+): void {
+  const cause = context.cause
+  console.error(`[ExportMD] ${reason}`, {
+    shareId: context.shareId,
+    source: context.source,
+    dataUrl: context.dataUrl,
+    text: context.text == null ? undefined : debugPreview(context.text),
+    payload: context.payload == null ? undefined : debugPreview(context.payload),
+    cause: cause instanceof Error
+      ? {
+          name: cause.name,
+          message: cause.message,
+          stack: cause.stack
+        }
+      : cause
+  })
+}
+
+function filterChatGptExportMessages (chat: ChatGptShareConversation): ChatGptShareConversation {
+  return {
+    ...chat,
+    replies: chat.replies.filter((reply) => {
+      return reply.type !== 'tool' && reply.statement.trim().length > 0
+    })
+  }
+}
+
+function renderChatGptShareMarkdown (chat: ChatGptShareConversation): string {
+  const metadata = ['Provider: ChatGPT']
+  if (chat.updatedAt != null) {
+    metadata.push(`Updated: ${formatUnixTimestamp(chat.updatedAt)}`)
+  }
+  if (chat.aiModel.trim().length > 0) {
+    metadata.push(`Model: ${chat.aiModel}`)
+  }
+
+  return renderMarkdownDocument({
+    title: chat.title.trim().length > 0 ? chat.title.trim() : 'ChatGPT Export',
+    metadata,
+    messages: chat.replies.map((reply) => ({
+      heading: reply.authorName.trim().length > 0 ? reply.authorName.trim() : reply.type,
+      body: reply.statement.trim()
+    }))
   })
 }
 
@@ -750,27 +916,13 @@ function parseShareHtml (
     throw new Error('Could not parse this conversation — the page format may have changed or the link is not public.')
   }
 
-  if (chat.replies.length === 0) {
-    logParseFailure('Parsed share page has no replies', {
-      shareUrl,
-      shareId,
-      proxyUrl,
-      html,
-      details: {
-        title: chat.title,
-        parsedShareId: chat.shareId,
-        replyCount: chat.replies.length
-      }
-    })
-    throw new Error('Could not read this conversation — check the link is public and try again.')
-  }
+  const exportChat = filterChatGptExportMessages(chat)
 
-  const markdown = chatGptShareToMarkdown(chat)
-  const resolvedShareId = chat.shareId.length > 0 ? chat.shareId : shareId
-  const filename = sanitizeFilename(chat.title, resolvedShareId)
+  const markdown = renderChatGptShareMarkdown(exportChat)
+  const filename = sanitizeFilename(exportChat.title)
 
   return {
-    title: chat.title.length > 0 ? chat.title : 'ChatGPT Export',
+    title: exportChat.title.length > 0 ? exportChat.title : 'ChatGPT Export',
     markdown,
     filename,
     source
@@ -797,10 +949,15 @@ function validateShareUrl (url: string): { trimmed: string, shareId: string } {
 function validateSupportedShareUrl (url: string): { trimmed: string, shareId: string, source: 'chatgpt' | 'grok' } {
   const trimmed = url.trim()
 
-  if (isGrokShareUrl(trimmed)) {
+  if (isGrokUrl(trimmed)) {
+    const shareId = getGrokShareId(trimmed)
+    if (shareId == null) {
+      throw new Error('Please enter a valid Grok share link (grok.com/share/...).')
+    }
+
     return {
       trimmed,
-      shareId: getGrokShareId(trimmed) ?? '',
+      shareId,
       source: 'grok'
     }
   }
@@ -830,8 +987,8 @@ export async function exportConversationShare (
       console.warn('[ExportMD] Falling back to server export')
       reportProgress(onProgress, {
         strategy: 'server-api',
-        source: '/api/export',
-        status: 'Client proxy failed, trying server export…'
+        source: EXPORTMD_API_SOURCE,
+        status: 'Client proxy failed, trying server export...'
       })
       return await exportViaApiFallback(trimmed, onProgress)
     }
@@ -842,7 +999,7 @@ export async function exportConversationShare (
     reportProgress(onProgress, {
       strategy: 'client-proxy',
       source: firstProxy.id,
-      status: `Trying ${firstProxy.id}…`
+      status: 'Starting client export...'
     })
   }
 
@@ -851,7 +1008,7 @@ export async function exportConversationShare (
     reportProgress(onProgress, {
       strategy: 'client-proxy',
       source,
-      status: 'Parsing conversation…'
+      status: 'Parsing conversation...'
     })
     const result = parseShareHtml(html, shareId, trimmed, proxyUrl, source)
     reportProgress(onProgress, {
@@ -864,8 +1021,8 @@ export async function exportConversationShare (
     console.warn('[ExportMD] Falling back to server export')
     reportProgress(onProgress, {
       strategy: 'server-api',
-      source: '/api/export',
-      status: 'Client proxies failed, trying server export…'
+      source: EXPORTMD_API_SOURCE,
+      status: 'Client proxies failed, trying server export...'
     })
     return await exportViaApiFallback(url, onProgress)
   }

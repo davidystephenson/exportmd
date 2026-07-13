@@ -4,9 +4,6 @@ Local style guide copy for agent-led repos in the Pantheon ecosystem.
 Every in-scope project keeps its own `STYLE.md` at the repo or project root.
 Keep these copies synchronized across in-scope projects when the style changes.
 
-Repos in scope: non-client Pantheon-owned repos and project roots.
-This includes `athena`, `dotfiles`, `exportmd`, `tuf`, `venus`, `inside`, `bloodline`, `squire`, `valkyrie`, `eris`, `longlivetheempress`, `hera`, `tyche`, and `pantheon`.
-Client and company workspaces under Tyche client folders keep their local style unless they explicitly opt in.
 Apply to every `.md` file in scope unless the file is raw source material, generated output, imported text, or historical evidence.
 
 Follow markdownlint rules (except for line length) in all markdown files.
@@ -18,6 +15,13 @@ They do not apply to block quotes, fenced code, indented code, inline code, link
 
 Do not use bolding (`**bold**`) as a formatting tool.
 Bolding is reserved for meaningful inline emphasis.
+
+## Links
+
+Local filesystem link targets must be absolute paths starting with `/home/david/`.
+Do not use `~` in a Markdown link target because Markdown renderers treat it as a literal relative URL and do not expand it to the home directory.
+The visible label may use a short form such as `~/athena/athena` when that is easier to scan, but the link target must stay absolute.
+Example: `[Athena](/home/david/athena/athena)`.
 
 Prefer letting each sentence be on its own line, with no empty lines between sentences in the same paragraph.
 This is advisory because URLs, initials, abbreviations, versions, and quoted/source text need judgment.

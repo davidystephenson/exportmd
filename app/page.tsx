@@ -27,7 +27,7 @@ type ErrorKind = 'generic' | 'private'
 const FAST_MODE_STORAGE_KEY = 'exportmd-fast-mode'
 
 function strategyLabel (strategy: ExportProgress['strategy']): string {
-  return strategy === 'client-proxy' ? 'Client CORS proxy' : 'Export worker'
+  return strategy === 'client-proxy' ? 'Client CORS proxy' : 'ExportMD API'
 }
 
 function ExportProgressPanel ({ progress }: { progress: ExportProgress }): JSX.Element {
@@ -121,8 +121,8 @@ export default function Home (): JSX.Element {
     setCopied(false)
     setExportProgress({
       strategy: fastMode ? 'server-api' : 'client-proxy',
-      source: fastMode ? '/api/export' : 'corsfix',
-      status: fastMode ? 'Starting fast export…' : 'Starting export…'
+      source: fastMode ? 'ExportMD API' : 'Corsfix',
+      status: fastMode ? 'Starting fast export...' : 'Starting export...'
     })
 
     try {
@@ -176,10 +176,11 @@ export default function Home (): JSX.Element {
     } catch (error) {
       setPageState('error')
       setErrorKind('generic')
+      const message = error instanceof Error && error.message.trim().length > 0
+        ? error.message
+        : 'Could not copy to clipboard.'
       setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : 'Could not copy to clipboard.'
+        message
       )
     }
   }
