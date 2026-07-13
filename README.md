@@ -19,9 +19,9 @@ Domain research: [docs/domain-research-2026-06.md](docs/domain-research-2026-06.
 
 ExportMD is developed spec-first.
 This README is the human-readable product specification for the app, not just a summary after implementation.
-It should document the user experience, visible design, visible behavior, user-facing copy, export flow, privacy tradeoffs, and user-relevant infrastructure in enough detail for developers to lead agent-orchestrated development from the spec.
-It should not document internal implementation contracts that do not affect the user experience.
-Agents should read this file before changing behavior and should update it whenever a user-facing feature, design rule, export strategy, or deployment assumption changes.
+It documents the user experience, visible design, visible behavior, user-facing copy, export flow, privacy tradeoffs, and user-relevant infrastructure in enough detail for developers to lead agent-orchestrated development from the spec.
+It does not document internal implementation contracts that do not affect the user experience.
+Agents must read this file before changing behavior and must update it whenever a user-facing feature, design rule, export strategy, or deployment assumption changes.
 
 ## Export flow
 
@@ -91,7 +91,7 @@ On errors, the alert appears in the same form area so the input and recovery pat
 
 After a successful export, the result appears below the form in a framed preview.
 The markdown preview takes the available remaining height, scrolls internally, and wraps long words so large exports fit on narrow screens such as iPhone SE.
-The page itself should stay fixed while only the exported content scrolls.
+The page itself stays fixed while only the exported content scrolls.
 The markdown preview renders GitHub-flavored Markdown.
 It styles headings, paragraphs, lists, blockquotes, horizontal rules, inline code, code blocks, tables, and links inside the preview frame.
 Preview links open in a new tab.
@@ -143,7 +143,7 @@ The app metadata description is "One click ChatGPT or Grok to Markdown".
 The production domain is `exportmd.com`.
 Cloudflare provides registrar and DNS management for the domain.
 Vercel hosts the Next.js application.
-Cloudflare proxying should remain DNS-only for the Vercel domain records.
+Cloudflare proxying is DNS-only for the Vercel domain records.
 The app uses the Next.js App Router.
 The ExportMD API is deployed with the Vercel app rather than as a separate Cloudflare Worker.
 Deployment details live in [docs/deployment.md](docs/deployment.md).
