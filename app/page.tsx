@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useRef, useState, type FormEvent, type JSX } from 'react'
-import { AlertCircleIcon, CheckIcon, Loader2Icon } from 'lucide-react'
+import { AlertCircleIcon, Loader2Icon } from 'lucide-react'
+import { ExportSuccessFooter } from '@/components/export-success-footer'
 import { MarkdownPreview } from '@/components/markdown-preview'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -19,7 +20,6 @@ import {
   type ExportResult
 } from '@/lib/export-chatgpt'
 import { ThemeToggle } from '@/components/theme-toggle'
-import { cn } from '@/lib/utils'
 
 type PageState = 'idle' | 'loading' | 'success' | 'error'
 type ErrorKind = 'generic' | 'private'
@@ -48,41 +48,6 @@ function ExportProgressPanel ({ progress }: { progress: ExportProgress }): JSX.E
         <span className='font-medium text-foreground'>Status:</span>{' '}
         {progress.status}
       </p>
-    </div>
-  )
-}
-
-function ExportActions ({
-  copied,
-  onDownload,
-  onCopy,
-  onReset,
-  className
-}: {
-  copied: boolean
-  onDownload: () => void
-  onCopy: () => void
-  onReset: () => void
-  className?: string
-}): JSX.Element {
-  return (
-    <div className={cn('flex flex-row flex-wrap gap-2', className)}>
-      <Button variant='outline' onClick={() => { void onCopy() }}>
-        {copied
-          ? (
-            <>
-              <CheckIcon />
-              Copied!
-            </>
-            )
-          : (
-              'Copy'
-            )}
-      </Button>
-      <Button onClick={onDownload}>Download</Button>
-      <Button variant='ghost' onClick={onReset}>
-        Reset
-      </Button>
     </div>
   )
 }
@@ -273,6 +238,7 @@ export default function Home (): JSX.Element {
             {pageState === 'error' && errorKind === 'generic' && (
               <Alert variant='destructive'>
                 <AlertCircleIcon />
+                <AlertTitle>Export failed</AlertTitle>
                 <AlertDescription>{errorMessage}</AlertDescription>
               </Alert>
             )}
@@ -284,19 +250,13 @@ export default function Home (): JSX.Element {
             <CardContent className='flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-0'>
               <MarkdownPreview content={exportResult.markdown} />
 
-              <div className='flex shrink-0 flex-col gap-3 px-(--card-spacing) sm:flex-row sm:items-center sm:justify-between'>
-                <p className='text-sm text-muted-foreground'>
-                  <span className='font-medium text-foreground'>Source:</span>{' '}
-                  {exportResult.source}
-                </p>
-                <ExportActions
-                  copied={copied}
-                  className='sm:justify-end'
-                  onDownload={handleDownload}
-                  onCopy={() => { void handleCopy() }}
-                  onReset={handleReset}
-                />
-              </div>
+              <ExportSuccessFooter
+                copied={copied}
+                source={exportResult.source}
+                onDownload={handleDownload}
+                onCopy={() => { void handleCopy() }}
+                onReset={handleReset}
+              />
             </CardContent>
           </Card>
         )}

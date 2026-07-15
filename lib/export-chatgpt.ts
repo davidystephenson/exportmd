@@ -14,6 +14,7 @@ const EXPORTMD_API_SOURCE = 'ExportMD API'
 
 const JSONP_TIMEOUT_MS = 20_000
 const JSONP_CALLBACK_GRACE_MS = 750
+const SERVER_FETCH_RETRY_DELAYS_MS = [500, 1_500]
 
 type ProxyKind = 'fetch-raw' | 'fetch-json' | 'jsonp'
 
@@ -46,12 +47,6 @@ const CORS_PROXIES: CorsProxy[] = [
     buildUrl: (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`
   },
   {
-    id: 'allOrigins JSONP',
-    kind: 'jsonp',
-    buildUrl: (url, callbackName = 'callback') =>
-      `https://api.allorigins.win/get?callback=${encodeURIComponent(callbackName)}&url=${encodeURIComponent(url)}`
-  },
-  {
     id: 'cors.lol',
     kind: 'fetch-raw',
     buildUrl: (url) => `https://api.cors.lol/?url=${encodeURIComponent(url)}`
@@ -65,6 +60,12 @@ const CORS_PROXIES: CorsProxy[] = [
     id: 'every-origin',
     kind: 'fetch-json',
     buildUrl: (url) => `https://every-origin.vercel.app/get?url=${encodeURIComponent(url)}`
+  },
+  {
+    id: 'allOrigins JSONP',
+    kind: 'jsonp',
+    buildUrl: (url, callbackName = 'callback') =>
+      `https://api.allorigins.win/get?callback=${encodeURIComponent(callbackName)}&url=${encodeURIComponent(url)}`
   }
 ]
 
@@ -171,6 +172,10 @@ function isLikelyShareHtml (html: string): boolean {
 
 function createJsonpCallbackName (): string {
   return `exportmd_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+}
+
+async function wait (ms: number): Promise<void> {
+  return await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 async function fetchViaFetchProxy (proxy: CorsProxy, shareUrl: string): Promise<string> {
@@ -345,6 +350,7 @@ export interface ExportResult {
   markdown: string
   filename: string
   source: string
+  timestamp?: string
 }
 
 interface MarkdownMessage {
@@ -397,6 +403,26 @@ function sanitizeFilename (title: string): string {
   return `${sanitized.length > 0 ? sanitized : timestampFilenameBase()}-export.md`
 }
 
+function replaceMarkdownTitle (markdown: string, title: string): string {
+  return markdown.replace(/^#(?: .*)?(\r?\n|$)/, `# ${title}$1`)
+}
+
+function finalizeExportResult (result: ExportResult): ExportResult {
+  const trimmedTitle = result.title.trim()
+  const fallbackTimestamp = result.timestamp ?? timestampFilenameBase()
+  const title = trimmedTitle.length > 0
+    ? trimmedTitle
+    : fallbackTimestamp
+
+  return {
+    ...result,
+    title,
+    timestamp: result.timestamp ?? (trimmedTitle.length === 0 ? fallbackTimestamp : undefined),
+    markdown: replaceMarkdownTitle(result.markdown, title),
+    filename: sanitizeFilename(title)
+  }
+}
+
 function formatUnixTimestamp (timestamp: number): string {
   return new Date(timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)
 }
@@ -420,14 +446,11 @@ function renderMarkdownDocument (document: MarkdownDocument): string {
   return `${lines.map((line) => line.trimEnd()).join('\n').trimEnd()}\n`
 }
 
-async function fetchShareHtml (
+async function exportChatGptShareViaClientProxy (
   shareUrl: string,
+  shareId: string,
   onProgress?: ExportProgressCallback
-): Promise<{
-    html: string
-    proxyUrl: string
-    source: string
-  }> {
+): Promise<ExportResult> {
   if (CORS_PROXIES.length === 0) {
     throw new Error('No client-side proxy is configured.')
   }
@@ -436,40 +459,26 @@ async function fetchShareHtml (
 
   for (const proxy of CORS_PROXIES) {
     try {
-      return await fetchViaProxy(proxy, shareUrl, onProgress)
+      const { html, proxyUrl, source } = await fetchViaProxy(proxy, shareUrl, onProgress)
+
+      reportProgress(onProgress, {
+        strategy: 'client-proxy',
+        source,
+        status: 'Parsing conversation...'
+      })
+
+      const result = finalizeExportResult(parseShareHtml(html, shareId, shareUrl, proxyUrl, source))
+
+      reportProgress(onProgress, {
+        strategy: 'client-proxy',
+        source,
+        status: 'Export complete.'
+      })
+
+      return result
     } catch (error) {
       const failure = `${proxy.id}: ${error instanceof Error ? error.message : 'request failed'}`
       failures.push(failure)
-      console.error('[ExportMD] Client-side proxy failed', {
-        shareUrl,
-        failure
-      })
-    }
-  }
-
-  throw new Error(`Client-side proxies failed: ${failures.join('; ')}`)
-}
-
-async function fetchTextViaAvailableProxies (
-  targetUrl: string,
-  onProgress?: ExportProgressCallback
-): Promise<{ text: string, proxyUrl: string, source: string }> {
-  if (CORS_PROXIES.length === 0) {
-    throw new Error('No client-side proxy is configured.')
-  }
-
-  const failures: string[] = []
-
-  for (const proxy of CORS_PROXIES) {
-    try {
-      return await fetchTextViaProxy(proxy, targetUrl, onProgress)
-    } catch (error) {
-      const failure = `${proxy.id}: ${error instanceof Error ? error.message : 'request failed'}`
-      failures.push(failure)
-      console.error('[ExportMD] Client-side proxy failed', {
-        targetUrl,
-        failure
-      })
     }
   }
 
@@ -477,26 +486,52 @@ async function fetchTextViaAvailableProxies (
 }
 
 async function fetchShareHtmlOnServer (shareUrl: string): Promise<string> {
-  let response: Response
-  try {
-    response = await fetch(shareUrl, {
-      headers: CHATGPT_SHARE_HEADERS,
-      cache: 'no-store'
-    })
-  } catch {
-    throw new Error('Could not reach ChatGPT. Check your connection and try again.')
+  let lastTemporaryStatus: number | null = null
+
+  for (let attempt = 0; attempt <= SERVER_FETCH_RETRY_DELAYS_MS.length; attempt += 1) {
+    let response: Response
+    try {
+      response = await fetch(shareUrl, {
+        headers: CHATGPT_SHARE_HEADERS,
+        cache: 'no-store'
+      })
+    } catch {
+      if (attempt === SERVER_FETCH_RETRY_DELAYS_MS.length) {
+        throw new Error('Could not reach ChatGPT. Check your connection and try again.')
+      }
+
+      await wait(SERVER_FETCH_RETRY_DELAYS_MS[attempt])
+      continue
+    }
+
+    if (!response.ok) {
+      if (response.status === 429 || response.status >= 500) {
+        lastTemporaryStatus = response.status
+
+        if (attempt < SERVER_FETCH_RETRY_DELAYS_MS.length) {
+          await wait(SERVER_FETCH_RETRY_DELAYS_MS[attempt])
+          continue
+        }
+
+        break
+      }
+
+      throw new Error('Could not fetch this conversation. The link may be invalid or temporarily unavailable.')
+    }
+
+    const html = await response.text()
+    if (!isLikelyShareHtml(html)) {
+      throw new Error('Could not fetch a valid share page from ChatGPT.')
+    }
+
+    return html
   }
 
-  if (!response.ok) {
-    throw new Error('Could not fetch this conversation. The link may be invalid or temporarily unavailable.')
+  if (lastTemporaryStatus != null) {
+    throw new Error('ChatGPT is temporarily unavailable while fetching this share link. Please wait a moment and try again.')
   }
 
-  const html = await response.text()
-  if (!isLikelyShareHtml(html)) {
-    throw new Error('Could not fetch a valid share page from ChatGPT.')
-  }
-
-  return html
+  throw new Error('Could not reach ChatGPT. Check your connection and try again.')
 }
 
 export async function exportChatGptShareOnServer (url: string): Promise<ExportResult> {
@@ -542,8 +577,6 @@ function parseGrokSharePayload (
   const conversationTitle = typeof payload.conversation?.title === 'string'
     ? payload.conversation.title.trim()
     : ''
-  const title = conversationTitle.length > 0 ? conversationTitle : 'Grok Export'
-
   const responses = Array.isArray(payload.responses)
     ? payload.responses.filter((response) => {
       return response.isControl !== true &&
@@ -553,7 +586,7 @@ function parseGrokSharePayload (
     : []
 
   const markdown = renderMarkdownDocument({
-    title,
+    title: conversationTitle,
     metadata: ['Provider: Grok'],
     messages: responses.map((response) => ({
       heading: senderLabel(response.sender),
@@ -562,7 +595,7 @@ function parseGrokSharePayload (
   })
 
   return {
-    title,
+    title: conversationTitle,
     markdown,
     filename: sanitizeFilename(conversationTitle),
     source
@@ -586,22 +619,8 @@ async function fetchGrokSharePayload (shareId: string): Promise<GrokSharePayload
     throw new Error('Could not fetch this Grok conversation. The link may be invalid or temporarily unavailable.')
   }
 
-  const payload: unknown = await response.json().catch((cause) => {
-    logGrokParseFailure('Grok returned invalid JSON', {
-      shareId,
-      source: 'grok.com',
-      dataUrl: buildGrokShareDataUrl(shareId),
-      cause
-    })
-    return null
-  })
+  const payload: unknown = await response.json().catch(() => null)
   if (payload == null || typeof payload !== 'object') {
-    logGrokParseFailure('Grok returned an invalid payload shape', {
-      shareId,
-      source: 'grok.com',
-      dataUrl: buildGrokShareDataUrl(shareId),
-      payload
-    })
     throw new Error('Grok returned an invalid response.')
   }
 
@@ -616,37 +635,40 @@ async function exportGrokShareViaClientProxy (
   shareId: string,
   onProgress?: ExportProgressCallback
 ): Promise<ExportResult> {
-  const dataUrl = buildGrokShareDataUrl(shareId)
-  const { text, source } = await fetchTextViaAvailableProxies(dataUrl, onProgress)
-  let payload: GrokSharePayload
-  try {
-    payload = parseJsonText(text, 'Grok') as GrokSharePayload
-  } catch (cause) {
-    logGrokParseFailure('Could not parse Grok proxy response JSON', {
-      shareId,
-      source,
-      dataUrl,
-      text,
-      cause
-    })
-    throw cause
+  if (CORS_PROXIES.length === 0) {
+    throw new Error('No client-side proxy is configured.')
   }
 
-  reportProgress(onProgress, {
-    strategy: 'client-proxy',
-    source,
-    status: 'Parsing conversation...'
-  })
+  const dataUrl = buildGrokShareDataUrl(shareId)
+  const failures: string[] = []
 
-  const result = parseGrokSharePayload(payload, shareId, source)
+  for (const proxy of CORS_PROXIES) {
+    try {
+      const { text, source } = await fetchTextViaProxy(proxy, dataUrl, onProgress)
+      const payload = parseJsonText(text, 'Grok') as GrokSharePayload
 
-  reportProgress(onProgress, {
-    strategy: 'client-proxy',
-    source,
-    status: 'Export complete.'
-  })
+      reportProgress(onProgress, {
+        strategy: 'client-proxy',
+        source,
+        status: 'Parsing conversation...'
+      })
 
-  return result
+      const result = finalizeExportResult(parseGrokSharePayload(payload, shareId, source))
+
+      reportProgress(onProgress, {
+        strategy: 'client-proxy',
+        source,
+        status: 'Export complete.'
+      })
+
+      return result
+    } catch (cause) {
+      const failure = `${proxy.id}: ${cause instanceof Error ? cause.message : 'request failed'}`
+      failures.push(failure)
+    }
+  }
+
+  throw new Error(`Client-side proxies failed: ${failures.join('; ')}`)
 }
 
 export async function exportGrokShareOnServer (url: string): Promise<ExportResult> {
@@ -661,10 +683,10 @@ export async function exportGrokShareOnServer (url: string): Promise<ExportResul
 
 export async function exportConversationShareOnServer (url: string): Promise<ExportResult> {
   if (isGrokUrl(url)) {
-    return await exportGrokShareOnServer(url)
+    return finalizeExportResult(await exportGrokShareOnServer(url))
   }
 
-  return await exportChatGptShareOnServer(url)
+  return finalizeExportResult(await exportChatGptShareOnServer(url))
 }
 
 async function exportViaApiFallback (
@@ -682,17 +704,23 @@ async function exportViaApiFallback (
   try {
     response = await fetch('/api/export', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-ExportMD-Client': 'web'
+      },
       body: JSON.stringify({ url })
     })
   } catch {
-    console.error('[ExportMD] Server export fallback failed', { url, clientFailures })
     throw new Error('Could not fetch this conversation. Client proxies and the server fallback are unavailable.')
   }
 
   const payload: unknown = await response.json().catch(() => null)
 
   if (!response.ok) {
+    if (response.status === 429) {
+      throw new Error('ExportMD API is temporarily rate limited. Please wait a moment and try again.')
+    }
+
     if (
       payload != null &&
       typeof payload === 'object' &&
@@ -710,21 +738,19 @@ async function exportViaApiFallback (
         ? payload.message
         : 'Could not export this conversation. Please try again.'
 
-    console.error('[ExportMD] Server export fallback failed', { url, clientFailures, message })
     throw new Error(message)
   }
 
   if (
     payload == null ||
     typeof payload !== 'object' ||
-    !('title' in payload) ||
     !('markdown' in payload) ||
     !('filename' in payload) ||
-    !('source' in payload) ||
-    typeof payload.title !== 'string' ||
+    !('timestamp' in payload) ||
+    ('title' in payload && typeof payload.title !== 'string') ||
     typeof payload.markdown !== 'string' ||
     typeof payload.filename !== 'string' ||
-    typeof payload.source !== 'string'
+    typeof payload.timestamp !== 'string'
   ) {
     throw new Error('Could not export this conversation. Please try again.')
   }
@@ -736,102 +762,12 @@ async function exportViaApiFallback (
   })
 
   return {
-    title: payload.title,
+    title: 'title' in payload && typeof payload.title === 'string' ? payload.title : '',
     markdown: payload.markdown,
     filename: payload.filename,
-    source: payload.source
+    source: EXPORTMD_API_SOURCE,
+    timestamp: payload.timestamp
   }
-}
-
-function htmlDebugPreview (html: string): {
-  length: number
-  start: string
-  end: string
-} {
-  return {
-    length: html.length,
-    start: html.slice(0, 500),
-    end: html.length > 500 ? html.slice(-200) : ''
-  }
-}
-
-function logParseFailure (
-  reason: string,
-  context: {
-    shareUrl: string
-    shareId: string
-    proxyUrl?: string
-    html: string
-    cause?: unknown
-    details?: Record<string, unknown>
-  }
-): void {
-  const cause = context.cause
-  console.error(`[ExportMD] ${reason}`, {
-    shareUrl: context.shareUrl,
-    shareId: context.shareId,
-    proxyUrl: context.proxyUrl,
-    html: htmlDebugPreview(context.html),
-    cause: cause instanceof Error
-      ? {
-          name: cause.name,
-          message: cause.message,
-          stack: cause.stack
-        }
-      : cause,
-    ...context.details
-  })
-}
-
-function debugPreview (value: unknown): unknown {
-  if (typeof value === 'string') {
-    return {
-      length: value.length,
-      start: value.slice(0, 500),
-      end: value.length > 500 ? value.slice(-200) : ''
-    }
-  }
-
-  try {
-    const serialized = JSON.stringify(value)
-    if (typeof serialized === 'string') {
-      return {
-        length: serialized.length,
-        start: serialized.slice(0, 500),
-        end: serialized.length > 500 ? serialized.slice(-200) : ''
-      }
-    }
-  } catch {}
-
-  return value
-}
-
-function logGrokParseFailure (
-  reason: string,
-  context: {
-    shareId: string
-    source: string
-    dataUrl?: string
-    text?: string
-    payload?: unknown
-    cause?: unknown
-  }
-): void {
-  const cause = context.cause
-  console.error(`[ExportMD] ${reason}`, {
-    shareId: context.shareId,
-    source: context.source,
-    dataUrl: context.dataUrl,
-    text: context.text == null ? undefined : debugPreview(context.text),
-    payload: context.payload == null ? undefined : debugPreview(context.payload),
-    cause: cause instanceof Error
-      ? {
-          name: cause.name,
-          message: cause.message,
-          stack: cause.stack
-        }
-      : cause
-  })
 }
 
 function filterChatGptExportMessages (chat: ChatGptShareConversation): ChatGptShareConversation {
@@ -853,7 +789,7 @@ function renderChatGptShareMarkdown (chat: ChatGptShareConversation): string {
   }
 
   return renderMarkdownDocument({
-    title: chat.title.trim().length > 0 ? chat.title.trim() : 'ChatGPT Export',
+    title: chat.title.trim(),
     metadata,
     messages: chat.replies.map((reply) => ({
       heading: reply.authorName.trim().length > 0 ? reply.authorName.trim() : reply.type,
@@ -905,14 +841,7 @@ function parseShareHtml (
   let chat
   try {
     chat = parseChatGptShareHtml(html)
-  } catch (cause) {
-    logParseFailure('Could not parse share page HTML', {
-      shareUrl,
-      shareId,
-      proxyUrl,
-      html,
-      cause
-    })
+  } catch {
     throw new Error('Could not parse this conversation — the page format may have changed or the link is not public.')
   }
 
@@ -922,7 +851,7 @@ function parseShareHtml (
   const filename = sanitizeFilename(exportChat.title)
 
   return {
-    title: exportChat.title.length > 0 ? exportChat.title : 'ChatGPT Export',
+    title: exportChat.title,
     markdown,
     filename,
     source
@@ -977,20 +906,19 @@ export async function exportConversationShare (
   const { trimmed, shareId, source: shareSource } = validateSupportedShareUrl(url)
 
   if (options.fastMode === true) {
-    return await exportViaApiFallback(trimmed, onProgress)
+    return finalizeExportResult(await exportViaApiFallback(trimmed, onProgress))
   }
 
   if (shareSource === 'grok') {
     try {
       return await exportGrokShareViaClientProxy(shareId, onProgress)
     } catch {
-      console.warn('[ExportMD] Falling back to server export')
       reportProgress(onProgress, {
         strategy: 'server-api',
         source: EXPORTMD_API_SOURCE,
         status: 'Client proxy failed, trying server export...'
       })
-      return await exportViaApiFallback(trimmed, onProgress)
+      return finalizeExportResult(await exportViaApiFallback(trimmed, onProgress))
     }
   }
 
@@ -1004,27 +932,14 @@ export async function exportConversationShare (
   }
 
   try {
-    const { html, proxyUrl, source } = await fetchShareHtml(trimmed, onProgress)
-    reportProgress(onProgress, {
-      strategy: 'client-proxy',
-      source,
-      status: 'Parsing conversation...'
-    })
-    const result = parseShareHtml(html, shareId, trimmed, proxyUrl, source)
-    reportProgress(onProgress, {
-      strategy: 'client-proxy',
-      source,
-      status: 'Export complete.'
-    })
-    return result
+    return await exportChatGptShareViaClientProxy(trimmed, shareId, onProgress)
   } catch {
-    console.warn('[ExportMD] Falling back to server export')
     reportProgress(onProgress, {
       strategy: 'server-api',
       source: EXPORTMD_API_SOURCE,
       status: 'Client proxies failed, trying server export...'
     })
-    return await exportViaApiFallback(url, onProgress)
+    return finalizeExportResult(await exportViaApiFallback(url, onProgress))
   }
 }
 
