@@ -73,14 +73,12 @@ The singular Grok wording is only the visible status copy, it does not mean Grok
 Exports use one provider-neutral Markdown document shape.
 Each visible preview and downloaded export starts with a top-level `#` heading for the conversation title, or a timestamp fallback title when no provider title is available.
 Timestamp fallback titles use the export timestamp format `YYYY-MM-DDTHH-MM-SSZ`.
-The next line is italic metadata joined with ` | `.
-Metadata always includes `Provider: ChatGPT` or `Provider: Grok`.
-ChatGPT metadata also includes `Updated: YYYY-MM-DD HH:MM:SS` when a share update time is available and `Model: [model]` when a model value is available.
+Exports do not include provider, timestamp, or model metadata in the Markdown body.
 Messages render under `##` sender headings.
 ChatGPT exports filter out tool replies and empty statements before rendering.
 Each remaining ChatGPT reply uses the parsed author name as its `##` heading, or the reply type if no author name is available.
 Grok exports render trimmed non-control message text, and filter out control responses and empty messages before rendering.
-If a successful export has no messages after filtering, it still renders as a Markdown document with the title and metadata.
+If a successful export has no messages after filtering, it still renders as a Markdown document with the title.
 Grok sender value `human` renders as `## User`.
 Grok sender value `ASSISTANT` renders as `## Grok`.
 Any other non-empty Grok sender string is trimmed and used directly as the `##` heading.

@@ -360,7 +360,6 @@ interface MarkdownMessage {
 
 interface MarkdownDocument {
   title: string
-  metadata: string[]
   messages: MarkdownMessage[]
 }
 
@@ -423,16 +422,8 @@ function finalizeExportResult (result: ExportResult): ExportResult {
   }
 }
 
-function formatUnixTimestamp (timestamp: number): string {
-  return new Date(timestamp * 1000).toISOString().replace('T', ' ').slice(0, 19)
-}
-
 function renderMarkdownDocument (document: MarkdownDocument): string {
   const lines = [`# ${document.title}`]
-
-  if (document.metadata.length > 0) {
-    lines.push(`_${document.metadata.join(' | ')}_`)
-  }
 
   lines.push('')
 
@@ -587,7 +578,6 @@ function parseGrokSharePayload (
 
   const markdown = renderMarkdownDocument({
     title: conversationTitle,
-    metadata: ['Provider: Grok'],
     messages: responses.map((response) => ({
       heading: senderLabel(response.sender),
       body: String(response.message).trim()
@@ -780,17 +770,8 @@ function filterChatGptExportMessages (chat: ChatGptShareConversation): ChatGptSh
 }
 
 function renderChatGptShareMarkdown (chat: ChatGptShareConversation): string {
-  const metadata = ['Provider: ChatGPT']
-  if (chat.updatedAt != null) {
-    metadata.push(`Updated: ${formatUnixTimestamp(chat.updatedAt)}`)
-  }
-  if (chat.aiModel.trim().length > 0) {
-    metadata.push(`Model: ${chat.aiModel}`)
-  }
-
   return renderMarkdownDocument({
     title: chat.title.trim(),
-    metadata,
     messages: chat.replies.map((reply) => ({
       heading: reply.authorName.trim().length > 0 ? reply.authorName.trim() : reply.type,
       body: reply.statement.trim()
